@@ -44,20 +44,19 @@ def get_inverse_kinematics(target_position, target_orientation=np.eye(3)):
 
     # Third side of the triangle: joint 2 -> wrist
     D = np.sqrt((r4 - r2)**2 + (h4 - h2)**2)
-    phi = np.degrees(np.arctan2(h4 - h2, r4 - r2))   # angle of D above horizontal
+    phi = np.degrees(np.arctan2(h4 - h2, r4 - r2)) # angle of D above horizontal
 
     # Law of cosines: angle at joint 2 between D and the upper arm (NaN if the triangle can't close)
     psi = np.degrees(np.arccos((L1**2 + D**2 - L2**2) / (2 * L1 * D)))
 
     # Elbow-up: the upper arm sits psi ABOVE the D line
     upper_arm_angle = phi + psi
-    theta2 = beta - upper_arm_angle                  # positive shoulder_lift tips the arm forward
+    theta2 = beta - upper_arm_angle
 
-    # Where joint 3 ends up, then the lower arm's angle from joint 3 to the wrist
     r3 = r2 + L1 * np.cos(np.radians(upper_arm_angle))
     h3 = h2 + L1 * np.sin(np.radians(upper_arm_angle))
-    c = np.degrees(np.arctan2(h4 - h3, r4 - r3))     # lower arm angle above horizontal
-    theta3 = -c - theta2                             # because c = -(theta2 + theta3)
+    c = np.degrees(np.arctan2(h4 - h3, r4 - r3)) # lower arm angle above horizontal
+    theta3 = -c - theta2
 
     # --- theta4: point the gripper straight down ---
     theta4 = 90.0 + c
