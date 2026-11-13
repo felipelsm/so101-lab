@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+*.mp4
+ik_test*.png
+workspace_*.png
+.venv/
