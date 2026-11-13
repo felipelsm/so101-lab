@@ -1,10 +1,16 @@
 import time
 from so101_utils import load_calibration, move_to_pose, hold_position, setup_motors
 from so101_inverse_kinematics import get_inverse_kinematics
+import sys
+
+print(sys.argv)
+# python run.py 5 hello   ->   ['run.py', '5', 'hello']
+
+arg = sys.argv[1]
 
 # CONFIGURATION VARIABLES
-PORT_ID = "/dev/tty.usbmodem5A460848371" # REPLACE WITH YOUR PORT! 
-ROBOT_NAME = "follower-1"
+PORT_ID = "/dev/ttyACM0" # REPLACE WITH YOUR PORT! 
+ROBOT_NAME = "follow0"
 
 # Set 
 '''
@@ -13,7 +19,20 @@ The gripper command takes values of 0-100, while the other joints take values of
 the settings specified in the bus initialization.
 '''
 desired_ee = [0.2, 0.0, 0.03]  # x, y, z in meters
-desired_configuration = get_inverse_kinematics(desired_ee)
+if arg == "ik":
+    desired_configuration = get_inverse_kinematics(desired_ee)
+elif arg == "home":
+    desired_configuration = {
+    'shoulder_pan': 0.0,   # degrees
+    'shoulder_lift': 0.0,
+    'elbow_flex': 0.0,
+    'wrist_flex': 0.0,
+    'wrist_roll': 0.0,
+    'gripper': 50.0           # 0-100 range
+}
+else:
+    sys.exit(f"Unknown mode '{arg}'. Use 'ik' or 'home'.")
+
 move_time = 2.0  # seconds to reach desired position
 hold_time = 10.0  # total time to hold at 
 

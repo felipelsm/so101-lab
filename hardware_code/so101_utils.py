@@ -8,14 +8,31 @@ from pathlib import Path
 import draccus
 import time
 
-def load_calibration(ROBOT_NAME) -> None:
-    """
-    Helper to load calibration data from the specified file.
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
 
-    Args:
-        fpath (Path | None): Optional path to the calibration file. Defaults to `self.calibration_fpath`.
-    """
-    fpath = Path(f'calibration_files/{ROBOT_NAME}.json')
+from so101_inverse_kinematics import get_inverse_kinematics, get_gripper_target
+
+# def load_calibration(ROBOT_NAME) -> None:
+#     """
+#     Helper to load calibration data from the specified file.
+
+#     Args:
+#         fpath (Path | None): Optional path to the calibration file. Defaults to `self.calibration_fpath`.
+#     """
+#     fpath = Path(f'calibration_files/{ROBOT_NAME}.json')
+#     with open(fpath) as f, draccus.config_type("json"):
+#         calibration = draccus.load(dict[str, MotorCalibration], f)
+#         return calibration
+
+def load_calibration(ROBOT_NAME):
+    # this file:  ece4560/so101_lab/hw_code/so101_utils.py
+    # parents[0] = hw_code, parents[1] = so101_lab, parents[2] = ece4560
+    ece4560_folder = Path(__file__).resolve().parents[2]
+    fpath = ece4560_folder / 'calibration_files' / f'{ROBOT_NAME}.json'
+    if not fpath.exists():
+        raise FileNotFoundError(f"No calibration file at {fpath}")
     with open(fpath) as f, draccus.config_type("json"):
         calibration = draccus.load(dict[str, MotorCalibration], f)
         return calibration
@@ -82,3 +99,144 @@ def hold_position(bus, duration):
         if t > duration:
             break
         time.sleep(0.02)  # 50 Hz loop
+
+def move_to_pose_with_logging(bus, desired_position, duration):
+    start_time = time.time()
+    starting_position = bus.sync_read("Present_Position")
+    
+    # Initialize log fields
+    times = []
+    targets = []
+    actuals = []
+    joint_names = list(desired_position.keys())
+    
+    while True:
+        t = time.time() - start_time
+        if t > duration:
+            break
+
+        # Interpolation factor [0,1] (make sure it doesn't exceed 1)
+        alpha = min(t / duration, 1)
+
+        # Interpolate each joint
+        position_dict = {}
+        for joint in desired_position:
+            p0 = starting_position[joint]
+            pf = desired_position[joint]
+            position_dict[joint] = (1 - alpha) * p0 + alpha * pf
+
+        # Send command
+        bus.sync_write("Goal_Position", position_dict, normalize=True)
+
+        # Store Actual Position
+        present_pos = bus.sync_read("Present_Position")
+        
+        # Log time, target, and actual
+        times.append(time.time())
+        targets.append([position_dict[j] for j in joint_names])
+        actuals.append([present_pos[j] for j in joint_names])
+
+        # Sleep to achieve 50 Hz control loop
+        time.sleep(0.02) 
+        
+    # Convert to DataFrame
+    df = pd.DataFrame({
+        "time": times,
+        **{f"target_{j}": [t[i] for t in targets] for i, j in enumerate(joint_names)},
+        **{f"actual_{j}": [a[i] for a in actuals] for i, j in enumerate(joint_names)},
+    })
+    
+    return df
+
+def plot_data(df):
+
+    configuration = {
+        'shoulder_pan': 0.0,
+        'shoulder_lift': 0.0,
+        'elbow_flex': 0.00,
+        'wrist_flex': 0.0,
+        'wrist_roll': 0.0,
+        'gripper': 0          
+    }
+    joint_limits = {
+        'shoulder_pan': (-1.919, 1.919),
+        'shoulder_lift': (-1.74, 1.74),
+        'elbow_flex': (-1.69, 1.69),
+        'wrist_flex': (-1.65, 1.65),
+        'wrist_roll': (-2.74, 2.84),
+        'gripper': (0, 100)
+    }
+    joint_names = [j for j in configuration.keys()]
+    joint_limits = {j: (np.degrees(lim[0]), np.degrees(lim[1])) for j, lim in joint_limits.items()}
+
+    # Plot target vs actual for each joint
+    plt.figure(figsize=(10, 2 * len(joint_names)))
+    for i, j in enumerate(joint_names):
+        plt.subplot(len(joint_names), 1, i + 1)
+        plt.plot(df["time"], df[f"target_{j}"], label=f"Target {j}")
+        plt.plot(df["time"], df[f"actual_{j}"], label=f"Actual {j}", linestyle="--")
+        plt.ylabel("Position")
+        plt.legend(loc="upper right")
+        plt.ylim(joint_limits[f"{j}"][0], joint_limits[f"{j}"][1])
+    plt.xlabel("Time (s)")
+    plt.suptitle("Target vs Actual Joint Positions")
+    plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+    plt.show()
+
+def pick_up_block(bus, block_position, move_to_duration):
+    
+    # Offset from the center of the block to the end-effector target
+    gripper_target = get_gripper_target(block_position)
+    gripper_target[0] -= 0.02
+
+    # Move above block with gripper open
+    block_raised = gripper_target.copy()
+    block_raised[2] += 0.05  # raise block height amount
+    block_configuration_raised = get_inverse_kinematics(block_raised)
+    block_configuration_raised['gripper'] = 50
+    move_to_pose(bus, block_configuration_raised, move_to_duration)
+    
+    # Move down to block with gripper open
+    block_configuration = get_inverse_kinematics(gripper_target)
+    block_configuration['gripper'] = 50
+    move_to_pose(bus, block_configuration, 1.0)
+    
+    # Close gripper
+    block_configuration_closed = block_configuration.copy()
+    block_configuration_closed['gripper'] = 5
+    move_to_pose(bus, block_configuration_closed, 1.0)
+
+    # Lift up again
+    block_configuration_raised['gripper'] = 5
+    move_to_pose(bus, block_configuration_raised, 1.0)
+
+    return bus
+
+
+def place_block(bus, target_position, move_to_duration):
+    
+    # Offset from the center of the block to the end-effector target
+    gripper_target = get_gripper_target(target_position)
+
+    # Move above target with gripper closed
+    block_raised = gripper_target.copy()
+    block_raised[2] += 0.05  # raise 1 inch
+    block_configuration_raised = get_inverse_kinematics(block_raised)
+    block_configuration_raised['gripper'] = 5
+    move_to_pose(bus, block_configuration_raised, move_to_duration)
+    
+    # Move down to block
+    block_configuration = get_inverse_kinematics(gripper_target)
+    block_configuration['gripper'] = 5
+    move_to_pose(bus, block_configuration, 1.0)
+    
+    # Open gripper 
+    block_configuration_open = block_configuration.copy()
+    block_configuration_open['gripper'] = 50
+    move_to_pose(bus, block_configuration_open, 1.0)
+    
+    # Return to raised position
+    block_configuration_raised['gripper'] = 50
+    move_to_pose(bus, block_configuration_raised, 1.0)
+
+    return bus
